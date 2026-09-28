@@ -25,7 +25,7 @@ NUDITY_MODEL_PATH = MODELS_DIR / "nudity-detector"
 VIOLENCE_MODEL_PATH = MODELS_DIR / "vit-base-violence-detection"
 BLOOD_MODEL_PATH = MODELS_DIR / "bloodshotnet" / "yolo26s.onnx"
 WEAPON_MODEL_PATH = MODELS_DIR / "weapon" / "model" / "best.pt"
-LOGO_MODEL_PATH = MODELS_DIR / "logos" / "logo_detector.pt"
+LOGO_MODEL_PATH = MODELS_DIR / "logos" / "yolov8x_logo_best.pt"
 
 
 logger = logging.getLogger(__name__)
@@ -518,15 +518,6 @@ def analyze_logos(image):
                 box.conf[0].item()
             )
 
-            class_id = int(
-                box.cls[0].item()
-            )
-
-            class_name = model.names.get(
-                class_id,
-                str(class_id),
-            )
-
             coordinates = [
                 round(float(value), 2)
                 for value in box.xyxy[0].tolist()
@@ -536,7 +527,7 @@ def analyze_logos(image):
 
             detections.append(
                 {
-                    "brand": class_name,
+                    "class": "logo",
                     "confidence": round(
                         score,
                         2,
@@ -557,8 +548,6 @@ def analyze_logos(image):
         ),
         "detections": detections,
     }
-
-
 def _prepare_ocr_variants(image):
     image = normalize_image(image)
 

@@ -4,6 +4,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import requests
 import yt_dlp
 
 
@@ -19,34 +20,26 @@ class VideoProcessor:
 
         if self.ffmpeg_path is None:
             raise RuntimeError(
-                "FFmpeg est introuvable. "
-                "Installez FFmpeg et ajoutez-le au PATH."
+                "FFmpeg est introuvable. Installez FFmpeg et ajoutez-le au PATH."
             )
 
         if self.ffprobe_path is None:
             raise RuntimeError(
-                "ffprobe est introuvable. "
-                "Il est normalement fourni avec FFmpeg."
+                "ffprobe est introuvable. Il est normalement fourni avec FFmpeg."
             )
 
     def create_work_dir(self):
         work_dir = TEMP_DIR / str(uuid.uuid4())
         work_dir.mkdir(parents=True, exist_ok=True)
-
         return work_dir
 
-    def download_video(self, video_url: str):
+    def download_video(self, video_url):
         work_dir = self.create_work_dir()
 
-        output_template = str(
-            work_dir / "video.%(ext)s"
-        )
+        output_template = str(work_dir / "video.%(ext)s")
 
         ydl_opts = {
-            "format": (
-                "bestvideo[height<=720]+bestaudio/"
-                "best[height<=720]/best"
-            ),
+            "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
             "outtmpl": output_template,
             "merge_output_format": "mp4",
             "quiet": False,
@@ -81,19 +74,127 @@ class VideoProcessor:
         if not downloaded_path.exists():
             files = list(work_dir.glob("video.*"))
 
-            if not files:
+            video_candidates = [
+                path
+                for path in files
+                if path.suffix.lower()
+                not in {
+                    ".vtt",
+                    ".srt",
+                    ".ass",
+                    ".json",
+                    ".part",
+                }
+            ]
+
+            if not video_candidates:
                 raise RuntimeError(
                     "La vidéo n'a pas pu être téléchargée."
                 )
 
-            downloaded_path = files[0]
+            downloaded_path = video_candidates[0]
+
+        subtitle_opts = {
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["all"],
+            "subtitlesformat": "vtt/best",
+            "quiet": True,
+            "no_warnings": True,
+            "ignoreerrors": True,
+            "noplaylist": True,
+            "restrictfilenames": True,
+            "socket_timeout": 30,
+            "retries": 2,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(subtitle_opts) as ydl:
+                ydl.download([video_url])
+        except Exception:
+            pass
+
+        subtitle_path = self.find_subtitle(work_dir)
 
         return {
             "video_path": downloaded_path,
             "work_dir": work_dir,
             "title": info.get("title"),
             "duration": info.get("duration"),
+            "subtitle_path": subtitle_path,
         }
+
+    def find_subtitle(self, work_dir):
+        work_dir = Path(work_dir)
+
+        subtitle_extensions = [".vtt", ".srt", ".ass"]
+
+        candidates = []
+
+        for extension in subtitle_extensions:
+            candidates.extend(
+                work_dir.glob(f"*{extension}")
+            )
+
+        if not candidates:
+            return None
+
+        return candidates[0]
+
+    def download_external_file(self, url, destination_path):
+        destination_path = Path(destination_path)
+
+        response = requests.get(
+            url,
+            stream=True,
+            timeout=30,
+            headers={
+                "User-Agent": "Mozilla/5.0 AI-Social-Shield"
+            },
+        )
+
+        response.raise_for_status()
+
+        content_length = response.headers.get(
+            "content-length"
+        )
+
+        if content_length:
+            content_length = int(content_length)
+
+            if content_length > 20 * 1024 * 1024:
+                raise RuntimeError(
+                    "Le fichier externe dépasse la taille maximale autorisée de 20 MB."
+                )
+
+        downloaded_size = 0
+
+        with destination_path.open("wb") as output_file:
+            for chunk in response.iter_content(
+                chunk_size=1024 * 1024
+            ):
+                if not chunk:
+                    continue
+
+                downloaded_size += len(chunk)
+
+                if downloaded_size > 20 * 1024 * 1024:
+                    raise RuntimeError(
+                        "Le fichier externe dépasse la taille maximale autorisée de 20 MB."
+                    )
+
+                output_file.write(chunk)
+
+        if (
+            not destination_path.exists()
+            or destination_path.stat().st_size == 0
+        ):
+            raise RuntimeError(
+                "Le fichier externe est vide."
+            )
+
+        return destination_path
 
     def get_duration(self, video_path):
         video_path = Path(video_path)
@@ -105,6 +206,7 @@ class VideoProcessor:
             "-print_format",
             "json",
             "-show_format",
+            "-show_streams",
             str(video_path),
         ]
 
@@ -124,7 +226,11 @@ class VideoProcessor:
 
         return float(duration)
 
-    def extract_thumbnail(self, video_path, timestamp=1.0):
+    def extract_thumbnail(
+        self,
+        video_path,
+        timestamp=1.0,
+    ):
         video_path = Path(video_path)
 
         thumbnail_path = (
@@ -159,7 +265,11 @@ class VideoProcessor:
 
         return thumbnail_path
 
-    def extract_key_frames(self, video_path, frame_count=5):
+    def extract_key_frames(
+        self,
+        video_path,
+        frame_count=5,
+    ):
         video_path = Path(video_path)
 
         duration = self.get_duration(video_path)
@@ -253,7 +363,10 @@ class VideoProcessor:
             text=True,
         )
 
-        if result.returncode != 0 or not audio_path.exists():
+        if (
+            result.returncode != 0
+            or not audio_path.exists()
+        ):
             return None
 
         return audio_path
