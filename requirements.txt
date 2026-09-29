@@ -21,3 +21,4 @@ ninja
 yt-dlp
 faster-whisper
 curl-cffi
+onnxruntime
